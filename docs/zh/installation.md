@@ -21,7 +21,7 @@ uv sync --frozen --extra serve                # + websocket 服务
 uv sync --frozen --extra wireless             # + WirelessComm 策略服务
 uv sync --python 3.12 --frozen --no-dev --group pi05  # pi0.5 运行时
 uv sync --frozen --no-dev --group activevln   # ActiveVLN 运行时
-uv sync --frozen --no-dev --group qwen25-vln  # Qwen2.5-VL 导航运行时
+uv sync --frozen --no-dev --group qwen25-vln  # Qwen2.5-VL 导航运行时（含 SeeNav）
 ```
 
 ## 模型依赖组

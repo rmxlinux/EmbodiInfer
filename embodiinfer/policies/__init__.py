@@ -24,6 +24,7 @@ _LAZY_EXPORTS = {
     "Gr00tPolicy": ("embodiinfer.policies.gr00t", "Gr00tPolicy"),
     "LingBotVLAPolicy": ("embodiinfer.policies.lingbot_vla", "LingBotVLAPolicy"),
     "NaViDAPolicy": ("embodiinfer.policies.navida", "NaViDAPolicy"),
+    "SeeNavPolicy": ("embodiinfer.policies.seenav", "SeeNavPolicy"),
     "OpenVLAOFTPolicy": (
         "embodiinfer.policies.openvla_oft.modeling_openvla_oft",
         "OpenVLAOFTPolicy",
@@ -68,6 +69,7 @@ __all__ = [
     "QwenR2RLowPolicy",
     "QwenR2RPanoramicPolicy",
     "NaViDAPolicy",
+    "SeeNavPolicy",
     "StreamVLNPolicy",
     "make_policy",
     "register_policy",

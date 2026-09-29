@@ -18,6 +18,7 @@ before loading a model.
 | `qwen2.5-vl-3b-r2r-low-level` | `Vebbern/Qwen2.5-VL-3B-R2R-low-level` | recurrent egocentric R2R policy; `Left`/`Right`/`Move`/`Stop`; native graph-backed forward |
 | `qwen2.5-vl-3b-r2r-panoramic` | `Vebbern/Qwen2.5-VL-3B-R2R-panoramic` | recurrent panorama + candidate-view selector; candidate metadata lives in `Observation.metadata` |
 | `navida` | `waynechu/NaVIDA` | Qwen2.5-VL-3B; official v2 JPEG/history/generation contract; up to six atomic actions; eager or StaticCache manual-CUDA-Graph decode |
+| `seenav` | `wangzc9865/SeeNav-Agent` | Qwen2.5-VL-3B; official dual-view JSON action plan; explicit recurrent session, eager B=1 only |
 | `streamvln` | published local checkpoint layout | recurrent, episode-affine; SlowFast frame selection over a 32-step fast KV window and an eight-feature slow-memory prefix |
 
 ## Capabilities and installation
@@ -35,7 +36,7 @@ one request at a time. Policies without a network adapter use the Python API.
 | LingBot-VLA | `lingbot-vla` | No | Stateless batches | Decode | Yes |
 | Cosmos | `cosmos` | No | Model-specific candidate planning | Diffusion step | No |
 | ActiveVLN | `activevln` | No | Explicit recurrent session, B=1 | Eager path | No |
-| Qwen R2R low / panoramic, NaViDA | `qwen25-vln` | No | Explicit recurrent session, B=1 | Policy-native decode | No |
+| Qwen R2R low / panoramic, NaViDA, SeeNav | `qwen25-vln` | No | Explicit recurrent session, B=1 | Policy-native/eager decode | No |
 | StreamVLN | `streamvln` | Yes | Explicit recurrent session, B=1 | Policy-native decode | No |
 
 For GR00T, follow the environment and asset preparation in its
@@ -141,7 +142,7 @@ model-specific.
 
 ### Navigation profiles
 
-The three 3B navigation profiles use the same explicit-session API and can opt into
+The Qwen2.5-VL navigation profiles use the same explicit-session API and can opt into
 explicit manual CUDA Graph replay on CUDA. Low-level and panoramic graph their native
 next-token forward. NaViDA v2 uses eager multimodal prefill, a fixed-address
 StaticCache decode graph, and official temperature/top-k sampling outside the graph.
@@ -155,6 +156,20 @@ batches fresh, aligned runner inputs.
 Reference producers live under `scripts/activevln/`. Recurrent policies currently
 use synchronous execution; pipeline/async execution, group sampling, and
 best-of-N are unavailable.
+
+### SeeNav-Agent
+
+SeeNav-Agent uses the local `wangzc9865/SeeNav-Agent` Qwen2.5-VL-3B checkpoint.
+The adapter keeps the first-person and overhead RGB views in the official order and,
+by default, concatenates the overhead view on the left and the first-person view on
+the right. It builds the official JSON planning prompt, retains up to four completed
+turns in the explicit session, and parses `executable_plan` action IDs strictly.
+Pass `Observation.images` as `[first_person, overhead]` RGB float tensors; set
+`image_concat=False` in `make_policy` when the checkpoint prompt must receive two
+separate image tokens.
+Malformed, empty, or out-of-range plans fail the request. SeeNav is eager and supports
+one recurrent episode per call (`B=1`); CUDA Graphs, tensor parallelism, RL decoding,
+and HTTP batching are not advertised.
 
 ### StreamVLN
 

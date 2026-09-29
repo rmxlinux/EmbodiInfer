@@ -24,6 +24,7 @@ _LAZY_POLICY_MODULES = {
     "lingbot_vla": "embodiinfer.policies.lingbot_vla",
     "mock_flow_vla": "embodiinfer.policies.mock",
     "navida": "embodiinfer.policies.navida",
+    "seenav": "embodiinfer.policies.seenav",
     "openvla_oft": "embodiinfer.policies.openvla_oft.modeling_openvla_oft",
     "pi05": "embodiinfer.policies.pi05",
     "qwen2.5-vl-3b-r2r-low-level": "embodiinfer.policies.qwen_r2r_low",

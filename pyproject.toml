@@ -82,6 +82,9 @@ streamvln = [
     "safetensors",
     "Pillow",
 ]
+# Qwen2.5-VL navigation adapters, including SeeNav-Agent. The stock processor/model
+# APIs are compatible with the pinned runtime; checkpoint-specific prompt contracts
+# remain in each policy adapter.
 qwen25-vln = ["transformers==4.57.1", "torchvision", "safetensors", "Pillow"]
 # Offline benchmarks reuse published observations; HDF5 loading never needs LIBERO/Habitat.
 benchmark = ["PyYAML>=6", "h5py>=3.10"]
@@ -158,6 +161,7 @@ markers = [
     "cosmos: requires CUDA + the Cosmos Policy LIBERO Predict2-2B checkpoint + the Wan2.1 VAE (run on the box)",
     "dm05: requires CUDA + OpenDM + a DM0.5 checkpoint and norm_stats.json (run in a dedicated env)",
     "activevln: requires CUDA + the pinned ActiveVLN R2R checkpoint and reference bundle (run on the box)",
+    "seenav: requires the SeeNav-Agent checkpoint and Qwen2.5-VL runtime (run on the box)",
     "streamvln: requires CUDA + the StreamVLN checkpoint (run on the box)",
 ]
 

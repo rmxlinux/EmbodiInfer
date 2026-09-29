@@ -22,7 +22,7 @@ uv sync --frozen --extra serve                # + websocket server
 uv sync --frozen --extra wireless             # + WirelessComm policy server
 uv sync --python 3.12 --frozen --no-dev --group pi05  # pi0.5 runtime
 uv sync --frozen --no-dev --group activevln   # ActiveVLN runtime
-uv sync --frozen --no-dev --group qwen25-vln  # Qwen2.5-VL navigation runtime
+uv sync --frozen --no-dev --group qwen25-vln  # Qwen2.5-VL navigation runtime (including SeeNav)
 ```
 
 ## Capability groups

@@ -17,6 +17,7 @@
 | `qwen2.5-vl-3b-r2r-low-level` | `Vebbern/Qwen2.5-VL-3B-R2R-low-level` | 有状态第一人称 R2R 策略；输出 `Left`/`Right`/`Move`/`Stop`；原生前向支持 CUDA Graph |
 | `qwen2.5-vl-3b-r2r-panoramic` | `Vebbern/Qwen2.5-VL-3B-R2R-panoramic` | 有状态全景 + 候选视角选择器；候选元数据位于 `Observation.metadata` |
 | `navida` | `waynechu/NaVIDA` | Qwen2.5-VL-3B；沿用官方 v2 的 JPEG 处理、历史管理和生成规则；最多六个原子动作；支持 eager 或基于 StaticCache 的手动 CUDA Graph 解码 |
+| `seenav` | `wangzc9865/SeeNav-Agent` | Qwen2.5-VL-3B；官方双视图 JSON 动作计划；显式有状态会话，仅支持 eager B=1 |
 | `streamvln` | 已发布的本地检查点布局 | 有状态，同一 episode 固定在同一副本上；在 32 步 fast KV 窗口和八特征 slow-memory 前缀上进行 SlowFast 帧选择 |
 
 ## 功能支持与运行环境 {#capabilities-and-installation}
@@ -34,7 +35,7 @@ HTTP 与 WirelessComm 启动器使用相同的服务适配器。π0.5 支持
 | LingBot-VLA | `lingbot-vla` | 否 | 无状态批处理 | 解码 | 是 |
 | Cosmos | `cosmos` | 否 | 模型特定的候选规划 | 扩散步 | 否 |
 | ActiveVLN | `activevln` | 否 | 显式有状态会话，B=1 | eager 路径 | 否 |
-| Qwen R2R low / panoramic、NaViDA | `qwen25-vln` | 否 | 显式有状态会话，B=1 | 策略原生解码 | 否 |
+| Qwen R2R low / panoramic、NaViDA、SeeNav | `qwen25-vln` | 否 | 显式有状态会话，B=1 | 策略原生/eager 解码 | 否 |
 | StreamVLN | `streamvln` | 是 | 显式有状态会话，B=1 | 策略原生解码 | 否 |
 
 对于 GR00T，请遵循其
@@ -133,7 +134,7 @@ DM0.5 接受共享的 `embodiinfer.Observation`：`images` 中的 RGB float 张�
 
 ### 3B 导航模型
 
-三个 3B 导航模型使用相同的会话 API，可手动启用 CUDA Graph 重放。
+Qwen2.5-VL 导航模型使用相同的会话 API，可手动启用 CUDA Graph 重放。
 Low-level 和 panoramic 捕获原生的下一 token 前向计算；NaViDA v2 使用 eager 多模态 prefill、
 固定地址的 StaticCache 解码 graph，并在图外执行官方 temperature/top-k 采样。
 panoramic 的 `images[0]` 为全景图，候选图像可通过
@@ -145,6 +146,16 @@ Python 引擎为每轮导航任务分配独立会话，以 B=1 执行。
 
 参考数据生成脚本位于 `scripts/activevln/`。有状态策略目前同步执行，
 尚不支持流水线、异步执行、分组采样和 best-of-N。
+
+### SeeNav-Agent
+
+SeeNav-Agent 使用本地 `wangzc9865/SeeNav-Agent` Qwen2.5-VL-3B 检查点。
+适配器保持官方的第一人称和俯视图顺序，默认将俯视图放在左侧、第一人称图放在右侧拼接，
+构造官方 JSON 规划提示词，并在显式会话中保留最近四个已完成回合。
+`Observation.images` 应按 `[第一人称图, 俯视图]` 提供 RGB float 张量；如果检查点提示词需要两个独立图像 token，
+可在 `make_policy` 中设置 `image_concat=False`。
+`executable_plan` 的动作 ID 使用严格解析；格式错误、空计划和越界 ID 会显式失败。
+SeeNav 使用 eager B=1 执行，不声明 CUDA Graph、张量并行、RL 解码或 HTTP 批处理能力。
 
 ### StreamVLN
 
