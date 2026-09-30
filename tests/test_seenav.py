@@ -49,6 +49,9 @@ class FakeRunner:
         text = '{"visual_state_description":"ok","reasoning_and_reflection":"ok","language_plan":"forward","executable_plan":[{"action_id":0,"action_name":"Move forward by 0.25"}]}'
         return text, torch.tensor([11, 12]), []
 
+    def infer_batch(self, observations, memories):
+        return [self.infer(observation, memory) for observation, memory in zip(observations, memories, strict=True)]
+
 
 class InvalidRunner(FakeRunner):
     def infer(self, obs, memory):
@@ -107,12 +110,12 @@ def test_seenav_build_messages_preserves_dual_view_order() -> None:
     assert images[0].size == (16, 8)
 
 
-def test_seenav_policy_is_explicit_b1_and_engine_commits_memory() -> None:
+def test_seenav_policy_batches_independent_sessions_and_engine_commits_memory() -> None:
     runner = FakeRunner()
     policy = SeeNavPolicy("seenav", runner)
     obs = observation()
     batch = policy.collate([obs], ["request"])
-    core = EngineCore(policy, EngineConfig(device="cpu", max_batch_size=1))
+    core = EngineCore(policy, EngineConfig(device="cpu", max_batch_size=8))
     output = core.execute(batch, session_ids=[SessionKey("env", "episode")])[0]
     assert output.actions.tolist() == [[0.0, 0.0]]
     assert output.trace is not None
@@ -120,19 +123,66 @@ def test_seenav_policy_is_explicit_b1_and_engine_commits_memory() -> None:
     assert output.trace.meta["runtime_mode"] == "eager"
     assert output.trace.meta["cuda_graph_confirmed"] is False
     assert core.has_session_state()
-    with pytest.raises(ValueError, match="batch size 1"):
-        policy.collate([obs, obs], ["a", "b"])
-    with pytest.raises(ValueError, match="batch padding"):
-        policy.pad(batch, 2)
+    batch2 = policy.collate([obs, obs], ["a", "b"])
+    assert batch2.batch_size == 2
+    with pytest.raises(ValueError, match="synthetic sessions"):
+        policy.pad(batch2, 4)
+    core.reset_sessions([SessionKey("env", "episode")])
+    outputs = core.execute(
+        batch2,
+        session_ids=[SessionKey("env", "left"), SessionKey("env", "right")],
+    )
+    assert [output.request_id for output in outputs] == ["a", "b"]
+    assert all(output.actions.tolist() == [[0.0, 0.0]] for output in outputs)
+    assert all(output.meta["batch_size"] == 2 for output in outputs)
+    assert all(output.meta["row_index"] in {0, 1} for output in outputs)
 
 
 def test_seenav_parser_failure_rolls_back_the_session() -> None:
     policy = SeeNavPolicy("seenav", InvalidRunner())
     batch = policy.collate([observation()], ["request"])
-    core = EngineCore(policy, EngineConfig(device="cpu", max_batch_size=1))
+    core = EngineCore(policy, EngineConfig(device="cpu", max_batch_size=8))
     with pytest.raises(SeeNavOutputError):
         core.execute(batch, session_ids=[SessionKey("env", "episode")])
     assert not core.has_session_state()
+
+    batch = policy.collate([observation(), observation()], ["left", "right"])
+    with pytest.raises(SeeNavOutputError):
+        core.execute(
+            batch,
+            session_ids=[SessionKey("env", "left"), SessionKey("env", "right")],
+        )
+    assert not core.has_session_state()
+
+
+@pytest.mark.parametrize("size", [2, 4, 8])
+def test_seenav_recurrent_batch_sizes(size: int) -> None:
+    policy = SeeNavPolicy("seenav", FakeRunner())
+    observations = [observation() for _ in range(size)]
+    request_ids = [f"request-{index}" for index in range(size)]
+    sessions = [SessionKey("env", f"episode-{index}") for index in range(size)]
+    core = EngineCore(policy, EngineConfig(device="cpu", max_batch_size=8))
+
+    outputs = core.execute(policy.collate(observations, request_ids), session_ids=sessions)
+
+    assert [output.request_id for output in outputs] == request_ids
+    assert [output.meta["batch_size"] for output in outputs] == [size] * size
+    assert [output.meta["row_index"] for output in outputs] == list(range(size))
+
+
+def test_seenav_generation_backend_chunks_batches_above_eight() -> None:
+    from embodiinfer.engine.rollout.generation_backend import GenerationBackend
+
+    policy = SeeNavPolicy("seenav", FakeRunner())
+    core = EngineCore(policy, EngineConfig(device="cpu", max_batch_size=8))
+    backend = GenerationBackend(core)
+    observations = [observation() for _ in range(9)]
+    sessions = [SessionKey("env", f"episode-{index}") for index in range(9)]
+
+    outputs = backend.generate(observations, session_ids=sessions)
+
+    assert [output.request_id for output in outputs] == [f"g{index}" for index in range(9)]
+    assert [output.meta["batch_size"] for output in outputs] == [8] * 8 + [1]
 
 
 def test_seenav_memory_only_allows_b1_operations() -> None:

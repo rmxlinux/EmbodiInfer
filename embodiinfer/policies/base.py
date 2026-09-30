@@ -197,6 +197,21 @@ class VLAPolicy(abc.ABC, torch.nn.Module):
         return False
 
     @property
+    def supports_recurrent_batch(self) -> bool:
+        """Whether independent recurrent sessions may execute in one model batch.
+
+        The default preserves the serial B=1 transaction used by existing recurrent
+        adapters.  A policy that opts in must implement ``encode_prefix_batch`` and
+        expose a :class:`~embodiinfer.policies.decoder.BatchedAutoregressiveDecoder`.
+        """
+        return False
+
+    @property
+    def max_recurrent_batch_size(self) -> int:
+        """Maximum number of independent recurrent sessions in one execution."""
+        return 1
+
+    @property
     def manages_cuda_graph(self) -> bool:
         """Whether this policy configures a graph-backed native runtime itself."""
         return False
@@ -209,6 +224,20 @@ class VLAPolicy(abc.ABC, torch.nn.Module):
     @abc.abstractmethod
     def encode_prefix(self, batch: BatchedObservation, memory: MemoryState | None = None) -> PrefixState:
         """Encode the multimodal prefix and return the cross-attn KV cache."""
+
+    def encode_prefix_batch(
+        self,
+        batch: PolicyBatch,
+        memories: Sequence[MemoryState | None],
+    ) -> PrefixState:
+        """Encode independent recurrent memories as one prefix batch.
+
+        Policies opt into this method through :attr:`supports_recurrent_batch`; the
+        default fails explicitly so a serial recurrent adapter cannot be batched by
+        accident.
+        """
+        del batch, memories
+        raise NotImplementedError(f"{type(self).__name__} does not support recurrent batches")
 
     # ---- action decode strategy ---------------------------------------------
     @property

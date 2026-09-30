@@ -20,6 +20,7 @@ import torch
 
 from ..exceptions import SessionRequiredError, UnsupportedRecurrentModeError
 from ..policies.base import PolicyBatch, VLAPolicy
+from ..policies.decoder import BatchedAutoregressiveDecoder
 from ..types import ActionChunk, DecodeTrace, SessionKey
 from ..utils import now_ns, resolve_device, sync_if_cuda, torch_dtype
 from .config import EngineConfig
@@ -89,9 +90,10 @@ class EngineCore:
     one captured graph serves a range of real batch sizes. The core never branches on the
     paradigm.
 
-    This is what a rollout backend or a serving frontend calls. Recurrent policies run as
-    eager, single-item transactions through the session store; stateless policies can
-    also be driven concurrently by :class:`~embodiinfer.engine.async_engine.AsyncEngine`.
+    This is what a rollout backend or a serving frontend calls. Recurrent policies use
+    their declared session batching capability through the session store; stateless
+    policies can also be driven concurrently by
+    :class:`~embodiinfer.engine.async_engine.AsyncEngine`.
     """
 
     def __init__(self, policy: VLAPolicy, config: EngineConfig | None = None):
@@ -108,15 +110,17 @@ class EngineCore:
         self._sessions = SessionStore()
         if self.policy.is_recurrent:
             unsupported = []
-            if self.config.max_batch_size != 1:
-                unsupported.append("max_batch_size must be 1")
+            if self.config.max_batch_size < 1:
+                unsupported.append("max_batch_size must be positive")
+            if not self.policy.supports_recurrent_batch and self.config.max_batch_size != 1:
+                unsupported.append("max_batch_size must be 1 for this recurrent policy")
             if self.config.use_cuda_graph and not self.policy.manages_cuda_graph:
                 unsupported.append("use_cuda_graph must be False")
             if self.config.capture_full_loop:
                 unsupported.append("capture_full_loop must be False")
             if unsupported:
                 raise UnsupportedRecurrentModeError(
-                    "recurrent policies currently require eager B=1 execution: " + ", ".join(unsupported)
+                    "unsupported recurrent policy configuration: " + ", ".join(unsupported)
                 )
             if self.policy.manages_cuda_graph:
                 self.policy.configure_runtime(use_cuda_graph=self.config.use_cuda_graph)
@@ -276,6 +280,114 @@ class EngineCore:
             lease.rollback()
             raise
 
+    def _execute_recurrent_batch(
+        self,
+        batch: PolicyBatch,
+        num_steps: int | None,
+        generator: torch.Generator | None,
+        session_ids: Sequence[SessionKey] | None,
+    ) -> list[ActionChunk]:
+        """Execute independent recurrent sessions in one policy-owned batch.
+
+        The policy owns the ragged prompt and generation details.  The engine only
+        coordinates leases, cancellation, output ordering, timing, and the atomic
+        all-rows commit.
+        """
+        size = batch.batch_size
+        if not 1 < size <= self.policy.max_recurrent_batch_size:
+            raise UnsupportedRecurrentModeError(
+                f"recurrent batch size must be between 2 and "
+                f"{self.policy.max_recurrent_batch_size}"
+            )
+        if size > self.config.max_batch_size:
+            raise UnsupportedRecurrentModeError(
+                f"recurrent batch size {size} exceeds engine max_batch_size {self.config.max_batch_size}"
+            )
+        if session_ids is None or len(session_ids) != size:
+            raise SessionRequiredError("recurrent batch execution requires one SessionKey per row")
+        if len(set(session_ids)) != size:
+            raise ValueError("recurrent batch execution requires unique SessionKeys")
+        decoder = self.policy.decoder
+        if not isinstance(decoder, BatchedAutoregressiveDecoder):
+            raise UnsupportedRecurrentModeError(
+                f"{type(self.policy).__name__} declares recurrent batching without a "
+                "BatchedAutoregressiveDecoder"
+            )
+
+        leases = self._sessions.checkout_many(session_ids)
+        timer = _StageTimer(self.device)
+        try:
+            steps = num_steps or self.config.num_steps or self.pcfg.default_num_steps
+            moved = batch.to(self.device, self.dtype)
+            prefix = self.policy.encode_prefix_batch(
+                moved,
+                [lease.memory for lease in leases],
+            )
+            timer.mark_prefill_complete()
+            results = decoder.decode_batch(
+                decoder.init_state(size, generator),
+                prefix,
+                steps,
+                size,
+                None,
+                generator=generator,
+                cancelled=[lease.cancelled for lease in leases],
+            )
+            if len(results) != size:
+                raise RuntimeError(f"recurrent batch decoder returned {len(results)} rows for batch size {size}")
+            for result in results:
+                if result.next_memory is None:
+                    raise RuntimeError("recurrent batch decoder returned a row without next_memory")
+                if result.actions.ndim != 3 or result.actions.shape[0] != 1:
+                    raise RuntimeError(
+                        "recurrent batch decoder rows must have actions shaped [1, H, A], "
+                        f"got {tuple(result.actions.shape)}"
+                    )
+                if result.traces is not None and len(result.traces) != 1:
+                    raise RuntimeError("recurrent batch decoder traces must align one-to-one with rows")
+
+            latency_ms, timing = timer.finish()
+            chunks: list[ActionChunk] = []
+            for index, (result, request_id, session_id) in enumerate(
+                zip(results, moved.request_ids, session_ids, strict=True)
+            ):
+                row_timing = dict(timing)
+                row_meta = {
+                    "batch_size": size,
+                    "bucket": size,
+                    "num_steps": steps,
+                    "session": session_id,
+                    "row_index": index,
+                    "batch_e2e_ms": latency_ms,
+                    "amortized_request_ms": latency_ms / size,
+                }
+                chunks.append(
+                    ActionChunk(
+                        request_id=request_id,
+                        actions=result.actions[0].detach().float().cpu(),
+                        logprob=(
+                            result.behavior_logprob[0].detach().float().cpu()
+                            if result.behavior_logprob is not None
+                            else None
+                        ),
+                        latency_ms=latency_ms,
+                        meta=row_meta,
+                        trace=self._trace_to_cpu(
+                            result.traces[0] if result.traces else None,
+                            policy_version=self.policy_version,
+                            timing=row_timing,
+                        ),
+                        policy_version=self.policy_version,
+                        timing=row_timing,
+                    )
+                )
+            self._sessions.commit_many(leases, [result.next_memory for result in results])
+            return chunks
+        except BaseException:
+            for lease in leases:
+                lease.rollback()
+            raise
+
     @torch.no_grad()
     def execute(
         self,
@@ -286,6 +398,8 @@ class EngineCore:
         session_ids: Sequence[SessionKey] | None = None,
     ) -> list[ActionChunk]:
         if self.policy.is_recurrent:
+            if batch.batch_size > 1 and self.policy.supports_recurrent_batch:
+                return self._execute_recurrent_batch(batch, num_steps, generator, session_ids)
             return self._execute_recurrent(batch, num_steps, generator, session_ids)
         timer = _StageTimer(self.device)
         st = self._prefill(batch, num_steps, generator)

@@ -163,6 +163,30 @@ class AutoregressiveDecoder(ActionDecoder):
         return self.decode(state, prefix, num_steps, bucket, graphs).actions
 
 
+class BatchedAutoregressiveDecoder(AutoregressiveDecoder):
+    """Autoregressive decoder that can commit independent recurrent rows as one batch.
+
+    The return value is a list rather than a padded tensor because autoregressive
+    policies may emit different action horizons and different next-memory objects for
+    each session.  Policies opt into this capability explicitly; the engine keeps the
+    ordinary serial recurrent path for decoders that do not implement it.
+    """
+
+    @abc.abstractmethod
+    def decode_batch(
+        self,
+        state: torch.Tensor | None,
+        prefix: PrefixState,
+        num_steps: int,
+        bucket: int,
+        graphs,
+        *,
+        generator: torch.Generator | None = None,
+        cancelled: list[Callable[[], bool]] | None = None,
+    ) -> list[DecodeResult]:
+        """Generate one independent :class:`DecodeResult` for every batch row."""
+
+
 class FlowDecoder(RLDecoder):
     """N-step flow-matching Euler loop + flow-SDE rollout log-prob (pi0.5, GR00T).
 

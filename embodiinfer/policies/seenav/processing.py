@@ -160,6 +160,34 @@ class SeeNavProcessingRuntime:
         )
         return messages, images, prompt
 
+    def build_messages_batch(
+        self,
+        observations: list[Observation],
+        memories: list[SeeNavMemory],
+    ) -> tuple[list[str], list[list[Any]], list[str]]:
+        """Build independently ordered Qwen text/image rows for a recurrent batch.
+
+        Qwen's processor accepts one image list per text row.  Keeping the rows
+        nested here prevents history images from one session being associated with
+        another session when their history lengths differ.
+        """
+
+        if len(observations) != len(memories):
+            raise ValueError("SeeNav observations and memories must have identical lengths")
+        texts: list[str] = []
+        image_batches: list[list[Any]] = []
+        prompts: list[str] = []
+        for observation, memory in zip(observations, memories, strict=True):
+            messages, images, prompt = self.build_messages(observation, memory)
+            texts.append(
+                self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                if hasattr(self, "processor")
+                else prompt
+            )
+            image_batches.append(images)
+            prompts.append(prompt)
+        return texts, image_batches, prompts
+
 
 __all__ = [
     "SEENAV_JSON_TEMPLATE",

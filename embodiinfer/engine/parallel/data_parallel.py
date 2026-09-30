@@ -67,6 +67,8 @@ class Replica(Protocol):
     replica_id: int
     device: str
     is_recurrent: bool
+    supports_recurrent_batch: bool
+    max_recurrent_batch_size: int
 
     def execute(
         self,
@@ -112,6 +114,21 @@ class InProcessReplica:
         self.replica_id = replica_id
         self.device = str(core.device)
         self.is_recurrent = core.policy.is_recurrent
+        # Keep compatibility with lightweight core doubles and older policies
+        # that predate the recurrent-batch capability declaration.
+        self.supports_recurrent_batch = bool(getattr(core.policy, "supports_recurrent_batch", False))
+        policy_batch_limit = getattr(core.policy, "max_recurrent_batch_size", 1)
+        if (
+            self.supports_recurrent_batch
+            and (isinstance(policy_batch_limit, bool) or not isinstance(policy_batch_limit, int))
+        ):
+            raise ValueError("recurrent batch size limit must be an integer")
+        engine_batch_limit = getattr(getattr(core, "config", None), "max_batch_size", policy_batch_limit)
+        self.max_recurrent_batch_size = (
+            min(policy_batch_limit, engine_batch_limit) if self.supports_recurrent_batch else 1
+        )
+        if self.max_recurrent_batch_size < 1:
+            raise ValueError("recurrent batch size limit must be positive")
         self._failed = False
         self._shutdown = False
         self._inflight = 0
@@ -145,7 +162,7 @@ class InProcessReplica:
             raise ValueError("session_ids length must match observations length")
         if self.is_recurrent and session_ids is None:
             raise SessionRequiredError("recurrent replica execution requires one SessionKey per observation")
-        if self.is_recurrent and len(observations) != 1:
+        if self.is_recurrent and not self.supports_recurrent_batch and len(observations) != 1:
             raise ValueError("recurrent replica execution requires exactly one observation")
 
         with self._state_lock:
@@ -168,11 +185,11 @@ class InProcessReplica:
                             message=f"replica {self.replica_id} is not healthy",
                         )
                 if self.is_recurrent:
-                    # Keep the replica contract atomic: one recurrent call is
-                    # exactly one B=1 session transaction. DataParallelEngine
-                    # sequences multiple assigned turns and records one outcome
-                    # per transaction, so a later failure cannot make earlier
-                    # committed rows look unexecuted.
+                    # Keep the replica contract atomic: a batch-capable policy
+                    # owns one all-row transaction, while a legacy recurrent
+                    # policy receives one B=1 call. DataParallelEngine records
+                    # outcomes per transaction, so a later failure cannot make
+                    # earlier committed rows look unexecuted.
                     if session_ids is None:  # guarded before entering the replica lock
                         raise RuntimeError("recurrent session validation was bypassed")
                     batch = self.core.policy.collate(observations, request_ids)
@@ -537,20 +554,37 @@ class DataParallelEngine:
             groups[replica.replica_id][1].append(index)
 
         if self.is_recurrent:
-            # A recurrent row commits replica-local state. Keep rows for one
-            # replica ordered, but retain an independent outcome for every row
-            # so a later failure is never reported as undoing an earlier commit.
-            tasks = [
-                self._make_recurrent_task(
-                    replica,
-                    idxs,
-                    observations,
-                    request_ids,
-                    session_ids,
-                    num_steps,
-                )
-                for replica, idxs in groups.values()
-            ]
+            # Session affinity determines the groups. A batch-capable replica can
+            # execute each sub-group in one model call; legacy recurrent replicas
+            # retain the old serial B=1 transaction semantics. A caller may have
+            # more sessions pinned to one replica than the policy can fit in one
+            # model invocation, so keep those sub-groups in one replica task and
+            # execute them serially under the replica's execution lock.
+            tasks = []
+            for replica, idxs in groups.values():
+                if getattr(replica, "supports_recurrent_batch", False):
+                    tasks.append(
+                        self._make_recurrent_batch_task(
+                            replica,
+                            idxs,
+                            observations,
+                            request_ids,
+                            session_ids,
+                            num_steps,
+                            self._recurrent_batch_limit(replica),
+                        )
+                    )
+                else:
+                    tasks.append(
+                        self._make_recurrent_task(
+                            replica,
+                            idxs,
+                            observations,
+                            request_ids,
+                            session_ids,
+                            num_steps,
+                        )
+                    )
             return [outcome for outcomes in self.executor.run(tasks) for outcome in outcomes]
 
         tasks = [
@@ -565,6 +599,16 @@ class DataParallelEngine:
             for replica, idxs in groups.values()
         ]
         return self.executor.run(tasks)
+
+    @staticmethod
+    def _recurrent_batch_limit(replica: Replica) -> int:
+        """Return and validate a replica's independent-session batch ceiling."""
+        limit = getattr(replica, "max_recurrent_batch_size", 1)
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError(
+                f"replica {replica.replica_id} has invalid max_recurrent_batch_size {limit!r}"
+            )
+        return limit
 
     def _assign_replicas(
         self,
@@ -650,6 +694,36 @@ class DataParallelEngine:
                 )()
                 for index in idxs
             ]
+
+        return task
+
+    @staticmethod
+    def _make_recurrent_batch_task(
+        replica: Replica,
+        idxs: list[int],
+        observations: list[Observation],
+        request_ids: list[str],
+        session_ids: list[SessionKey] | None,
+        num_steps: int | None,
+        max_batch_size: int,
+    ) -> Callable[[], list[_Outcome]]:
+        """Run one replica's groups serially, splitting at its model limit."""
+
+        def task() -> list[_Outcome]:
+            outcomes: list[_Outcome] = []
+            for start in range(0, len(idxs), max_batch_size):
+                sub_idxs = idxs[start : start + max_batch_size]
+                outcomes.append(
+                    DataParallelEngine._make_task(
+                        replica,
+                        sub_idxs,
+                        observations,
+                        request_ids,
+                        session_ids,
+                        num_steps,
+                    )()
+                )
+            return outcomes
 
         return task
 

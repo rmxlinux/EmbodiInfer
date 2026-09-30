@@ -58,6 +58,7 @@ class FakeReplica:
         self._failed = False
         self.shutdown_calls = 0
         self.seen: list[int] = []  # tags this replica was asked to serve
+        self.batch_sizes: list[int] = []
         self.seen_sessions: list[SessionKey] = []
         self.reset_calls: list[list[SessionKey]] = []
         self.cancel_calls: list[list[SessionKey]] = []
@@ -66,6 +67,7 @@ class FakeReplica:
         if self._fail:
             self._failed = True
             raise RuntimeError(f"replica {self.replica_id} boom")
+        self.batch_sizes.append(len(observations))
         self.seen.extend(o.tag for o in observations)
         if session_ids is not None:
             self.seen_sessions.extend(session_ids)
@@ -547,6 +549,24 @@ def test_recurrent_episode_parallel_is_b1_per_replica_and_preserves_memory():
     ]
     assert all(batch_size == 1 for core in cores for batch_size in core.batch_sizes)
     assert dp.session_affinity[left] != dp.session_affinity[right]
+
+
+def test_recurrent_batch_replica_splits_groups_at_replica_limit():
+    replica = FakeReplica(0, recurrent=True)
+    replica.supports_recurrent_batch = True
+    replica.max_recurrent_batch_size = 2
+    dp = DataParallelEngine([replica])
+    sessions = [SessionKey("env", f"episode-{index}") for index in range(5)]
+
+    chunks = dp.execute(
+        [_Obs(index) for index in range(5)],
+        request_ids=[f"request-{index}" for index in range(5)],
+        session_ids=sessions,
+    )
+
+    assert [chunk.request_id for chunk in chunks] == [f"request-{index}" for index in range(5)]
+    assert replica.batch_sizes == [2, 2, 1]
+    assert replica.seen == list(range(5))
 
 
 def test_recurrent_reset_clears_owner_state_and_releases_affinity():

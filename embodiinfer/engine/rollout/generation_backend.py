@@ -74,11 +74,19 @@ class GenerationBackend:
     than silently sampled from.
     """
 
-    # Public capability disclosure.  Recurrent calls accept ragged environment
-    # histories, but the correctness path schedules B=1 executions serially;
-    # it is not padded-KV or continuous batching.
-    recurrent_batching_mode = "serial_ragged"
-    supports_true_ragged_batching = False
+    @property
+    def recurrent_batching_mode(self) -> str:
+        """Describe the recurrent scheduling mode exposed by this backend."""
+        return (
+            "eager_independent"
+            if getattr(self.policy, "supports_recurrent_batch", False)
+            else "serial_ragged"
+        )
+
+    @property
+    def supports_true_ragged_batching(self) -> bool:
+        """Whether recurrent rows with independent histories share one model call."""
+        return bool(getattr(self.policy, "supports_recurrent_batch", False))
 
     def __init__(self, core: EngineCore, weight_sync: LocalWeightSync | None = None):
         self.core = core
@@ -106,7 +114,7 @@ class GenerationBackend:
         *,
         session_ids: Sequence[SessionKey] | None = None,
     ) -> list[ActionChunk]:
-        if self.policy.is_recurrent:
+        if self.policy.is_recurrent and not getattr(self.policy, "supports_recurrent_batch", False):
             if session_ids is None or len(session_ids) != len(observations):
                 raise SessionRequiredError(
                     "recurrent generation requires one explicit SessionKey per observation"
@@ -118,6 +126,31 @@ class GenerationBackend:
             for index, (observation, session_id) in enumerate(zip(observations, session_ids)):
                 batch = self.policy.collate([observation], [f"g{index}"])
                 outputs.extend(self.core.execute(batch, num_steps, session_ids=[session_id]))
+            return outputs
+        if self.policy.is_recurrent:
+            if session_ids is None or len(session_ids) != len(observations):
+                raise SessionRequiredError(
+                    "recurrent generation requires one explicit SessionKey per observation"
+                )
+            if not observations:
+                return []
+            max_batch_size = int(getattr(self.policy, "max_recurrent_batch_size", 1))
+            if max_batch_size < 1:
+                raise UnsupportedRecurrentModeError("recurrent batch size limit must be positive")
+            outputs: list[ActionChunk] = []
+            for start in range(0, len(observations), max_batch_size):
+                end = start + max_batch_size
+                batch = self.policy.collate(
+                    observations[start:end],
+                    [f"g{i}" for i in range(start, min(end, len(observations)))],
+                )
+                outputs.extend(
+                    self.core.execute(
+                        batch,
+                        num_steps,
+                        session_ids=session_ids[start:end],
+                    )
+                )
             return outputs
         batch = self.policy.collate(observations, [f"g{i}" for i in range(len(observations))])
         return self.core.execute(batch, num_steps, session_ids=session_ids)

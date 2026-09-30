@@ -17,7 +17,7 @@
 | `qwen2.5-vl-3b-r2r-low-level` | `Vebbern/Qwen2.5-VL-3B-R2R-low-level` | 有状态第一人称 R2R 策略；输出 `Left`/`Right`/`Move`/`Stop`；原生前向支持 CUDA Graph |
 | `qwen2.5-vl-3b-r2r-panoramic` | `Vebbern/Qwen2.5-VL-3B-R2R-panoramic` | 有状态全景 + 候选视角选择器；候选元数据位于 `Observation.metadata` |
 | `navida` | `waynechu/NaVIDA` | Qwen2.5-VL-3B；沿用官方 v2 的 JPEG 处理、历史管理和生成规则；最多六个原子动作；支持 eager 或基于 StaticCache 的手动 CUDA Graph 解码 |
-| `seenav` | `wangzc9865/SeeNav-Agent` | Qwen2.5-VL-3B；官方双视图 JSON 动作计划；显式有状态会话，仅支持 eager B=1 |
+| `seenav` | `wangzc9865/SeeNav-Agent` | Qwen2.5-VL-3B；官方双视图 JSON 动作计划；显式独立会话；eager 支持 B=1/2/4/8 |
 | `streamvln` | 已发布的本地检查点布局 | 有状态，同一 episode 固定在同一副本上；在 32 步 fast KV 窗口和八特征 slow-memory 前缀上进行 SlowFast 帧选择 |
 
 ## 功能支持与运行环境 {#capabilities-and-installation}
@@ -35,7 +35,8 @@ HTTP 与 WirelessComm 启动器使用相同的服务适配器。π0.5 支持
 | LingBot-VLA | `lingbot-vla` | 否 | 无状态批处理 | 解码 | 是 |
 | Cosmos | `cosmos` | 否 | 模型特定的候选规划 | 扩散步 | 否 |
 | ActiveVLN | `activevln` | 否 | 显式有状态会话，B=1 | eager 路径 | 否 |
-| Qwen R2R low / panoramic、NaViDA、SeeNav | `qwen25-vln` | 否 | 显式有状态会话，B=1 | 策略原生/eager 解码 | 否 |
+| Qwen R2R low / panoramic、NaViDA | `qwen25-vln` | 否 | 显式有状态会话，B=1 | 策略原生/eager 解码 | 否 |
+| SeeNav | `qwen25-vln` | 否 | 显式独立会话，eager B=1/2/4/8 | 策略原生批处理解码 | 否 |
 | StreamVLN | `streamvln` | 是 | 显式有状态会话，B=1 | 策略原生解码 | 否 |
 
 对于 GR00T，请遵循其
@@ -155,7 +156,8 @@ SeeNav-Agent 使用本地 `wangzc9865/SeeNav-Agent` Qwen2.5-VL-3B 检查点。
 `Observation.images` 应按 `[第一人称图, 俯视图]` 提供 RGB float 张量；如果检查点提示词需要两个独立图像 token，
 可在 `make_policy` 中设置 `image_concat=False`。
 `executable_plan` 的动作 ID 使用严格解析；格式错误、空计划和越界 ID 会显式失败。
-SeeNav 使用 eager B=1 执行，不声明 CUDA Graph、张量并行、RL 解码或 HTTP 批处理能力。
+SeeNav 使用 eager 执行，支持独立会话的 B=1、2、4、8 批处理；每一行保留自己的历史和事务。
+它不声明 CUDA Graph、张量并行、RL 解码或 HTTP 批处理能力。
 
 ### StreamVLN
 

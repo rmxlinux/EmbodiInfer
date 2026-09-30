@@ -9,7 +9,8 @@
 
 在各设备上创建完整模型副本，再传给 `DataParallelEngine`。无状态请求会分发到正常运行的副本。
 有状态请求需提供 `SessionKey`：首次调用分配副本，后续调用固定使用该副本，
-直到 `reset_sessions()` 清除状态并解除绑定。每个有状态会话以 B=1 执行，独立任务可跨设备并发。
+直到 `reset_sessions()` 清除状态并解除绑定。有状态策略可以声明独立会话的批处理上限；
+没有该能力的策略每次模型调用只执行一个会话。批次中的每一行仍固定在自己的副本上。
 
 会话状态保存在所属副本内，失败后不能迁移到其他副本重试。
 `cancel_sessions()` 也会发往所属副本，但不会解除会话与副本的绑定。
@@ -30,9 +31,10 @@ dp.reset_sessions(sessions)
 [`examples/pi05_inference.py`](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/examples/pi05_inference.py)，
 使用 `--gpus 2` 调用时，它会为每个 GPU 构造一个副本。
 
-对于有状态策略，每个副本同一时间只使用一个会话，并将相互
-独立的 episode 分发到多个副本上。异步/流水线执行、group 采样
-以及 best-of-N 目前仅支持无状态策略。
+对于没有批处理能力的有状态策略，每个副本同一时间只使用一个会话，并将相互
+独立的 episode 分发到多个副本上。支持批处理的策略（例如 SeeNav）可以在同一副本
+合并独立会话，同时保留每个会话的事务。异步/流水线执行、group 采样以及 best-of-N
+目前仅支持无状态策略。
 
 ## 双 GPU 性能对比
 

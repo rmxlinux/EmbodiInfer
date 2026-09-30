@@ -13,8 +13,9 @@ Construct a full-model replica on each device and pass the replicas to
 `DataParallelEngine`. Stateless requests are distributed across healthy
 replicas. Recurrent requests must provide a `SessionKey`: the first turn selects a
 replica, and later turns remain pinned there until `reset_sessions()` clears the state
-and releases the affinity. Turns within one recurrent session remain B=1, while
-independent episodes can execute concurrently across devices.
+and releases the affinity. A recurrent policy may declare an independent-session
+batch ceiling; policies without that capability execute one session per model call.
+All rows in a batch remain pinned to their owning replicas.
 
 Recurrent state is replica-local, so failed recurrent requests cannot migrate or retry
 on another replica. `cancel_sessions()` is routed to the owning replica but does not
@@ -36,9 +37,11 @@ For a complete stateless π0.5 example, see
 [`examples/pi05_inference.py`](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/examples/pi05_inference.py),
 which constructs one replica per GPU when invoked with `--gpus 2`.
 
-For recurrent policies, use one session at a time per replica and distribute
-independent episodes across replicas. Async/pipeline execution, group sampling,
-and best-of-N currently support stateless policies only.
+For recurrent policies without a batch capability, use one session at a time per
+replica and distribute independent episodes across replicas. A batch-capable policy
+such as SeeNav can combine sessions that share a replica while preserving per-session
+transactions. Async/pipeline execution, group sampling, and best-of-N currently
+support stateless policies only.
 
 ## Two-GPU data/tensor parallel results
 

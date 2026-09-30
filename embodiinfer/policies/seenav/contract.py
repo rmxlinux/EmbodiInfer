@@ -25,6 +25,7 @@ SEENAV_ACTION_NAMES = (
 )
 SEENAV_MAX_ACTION_ID = len(SEENAV_ACTION_NAMES) - 1
 SEENAV_MAX_PLAN_ACTIONS = 8
+SEENAV_MAX_BATCH_SIZE = 8
 SEENAV_MESSAGE_WINDOW = 5
 
 
@@ -44,7 +45,7 @@ class SeeNavTurn:
 
 @dataclass(frozen=True)
 class SeeNavMemory:
-    """Episode-local history for the B=1 recurrent SeeNav adapter."""
+    """Episode-local history for one recurrent SeeNav session."""
 
     turns: tuple[SeeNavTurn, ...] = ()
 
@@ -78,10 +79,18 @@ class SeeNavMemory:
 
 @dataclass
 class SeeNavBatch:
-    """The single-row batch layout consumed by SeeNav."""
+    """The observation/request layout consumed by the SeeNav runner."""
 
     observations: list[Observation]
     request_ids: list[str]
+
+    def __post_init__(self) -> None:
+        if not 1 <= len(self.observations) <= SEENAV_MAX_BATCH_SIZE:
+            raise ValueError(f"SeeNav batch size must be between 1 and {SEENAV_MAX_BATCH_SIZE}")
+        if len(self.request_ids) != len(self.observations):
+            raise ValueError("SeeNav observations and request_ids must have identical lengths")
+        if len(set(self.request_ids)) != len(self.request_ids):
+            raise ValueError("SeeNav request_ids must be unique within a batch")
 
     @property
     def batch_size(self) -> int:
@@ -101,6 +110,30 @@ class SeeNavPrefix:
     batch_size: int = 1
 
     def to(self, device: torch.device | str) -> SeeNavPrefix:
+        del device
+        return self
+
+    def expand(self, num_samples: int) -> PrefixState:
+        if num_samples != 1:
+            raise NotImplementedError("SeeNav does not support candidate expansion")
+        return self
+
+
+@dataclass(frozen=True)
+class SeeNavBatchPrefix:
+    """A padded processor batch plus one committed memory per session."""
+
+    observations: tuple[Observation, ...]
+    memories: tuple[SeeNavMemory, ...]
+    batch_size: int
+
+    def __post_init__(self) -> None:
+        if self.batch_size != len(self.observations) or self.batch_size != len(self.memories):
+            raise ValueError("SeeNav batch prefix rows and batch_size must agree")
+        if not 1 <= self.batch_size <= SEENAV_MAX_BATCH_SIZE:
+            raise ValueError(f"SeeNav prefix batch size must be between 1 and {SEENAV_MAX_BATCH_SIZE}")
+
+    def to(self, device: torch.device | str) -> SeeNavBatchPrefix:
         del device
         return self
 
@@ -180,9 +213,11 @@ __all__ = [
     "SEENAV_ACTION_NAMES",
     "SEENAV_CHECKPOINT",
     "SEENAV_MAX_PLAN_ACTIONS",
+    "SEENAV_MAX_BATCH_SIZE",
     "SEENAV_MESSAGE_WINDOW",
     "SEENAV_REVISION",
     "SeeNavBatch",
+    "SeeNavBatchPrefix",
     "SeeNavMemory",
     "SeeNavOutputError",
     "SeeNavPrefix",
