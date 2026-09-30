@@ -156,7 +156,7 @@ def _build(
 def build_seenav(
     checkpoint=None,
     *,
-    max_new_tokens=512,
+    max_new_tokens=64,
     image_concat=True,
     history_window=4,
     compile_backend="none",

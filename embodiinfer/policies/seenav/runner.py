@@ -17,7 +17,7 @@ class SeeNavRunner(SeeNavProcessingRuntime):
         self,
         checkpoint: str,
         *,
-        max_new_tokens: int = 512,
+        max_new_tokens: int = 64,
         image_concat: bool = True,
         history_window: int = 4,
         load_device: str | None = None,
@@ -44,7 +44,7 @@ class SeeNavRunner(SeeNavProcessingRuntime):
         self.processor = AutoProcessor.from_pretrained(self.checkpoint, local_files_only=True)
         self.processor.tokenizer.padding_side = "left"
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            self.checkpoint, local_files_only=True, torch_dtype="auto"
+            self.checkpoint, local_files_only=True, torch_dtype=torch.bfloat16
         )
         config = self.model.config
         text_config = getattr(config, "text_config", config)

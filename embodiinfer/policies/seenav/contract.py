@@ -29,7 +29,7 @@ SEENAV_MESSAGE_WINDOW = 5
 
 
 class SeeNavOutputError(ValueError):
-    """The model emitted text outside SeeNav's JSON action contract."""
+    """The model emitted text outside SeeNav's compact JSON action contract."""
 
 
 @dataclass(frozen=True)
@@ -123,11 +123,13 @@ def _strip_code_fence(text: str) -> str:
 
 
 def parse_seenav_actions(text: str, *, max_actions: int = SEENAV_MAX_PLAN_ACTIONS) -> torch.Tensor:
-    """Parse SeeNav JSON into ``[num_actions, 2]`` discrete action rows.
+    """Parse compact SeeNav JSON into ``[num_actions, 2]`` discrete action rows.
 
-    The first column is the upstream action id and the second column is reserved for
-    the model-neutral navigation action payload, matching the other navigation policies.
-    Malformed, empty, or out-of-range plans fail explicitly.
+    The compact contract is ``{"actions": [0, 2]}``. The legacy
+    ``executable_plan`` object is still accepted so recorded responses remain
+    readable, but new prompts request only the compact form. The first output
+    column is the upstream action id and the second is reserved for the
+    model-neutral navigation payload.
     """
 
     if not isinstance(text, str) or not text.strip():
@@ -138,9 +140,24 @@ def parse_seenav_actions(text: str, *, max_actions: int = SEENAV_MAX_PLAN_ACTION
         raise SeeNavOutputError(f"invalid SeeNav JSON: {exc.msg}") from exc
     if not isinstance(payload, dict):
         raise SeeNavOutputError("SeeNav output must be a JSON object")
+    compact = payload.get("actions")
+    if compact is not None:
+        if not isinstance(compact, list) or not compact:
+            raise SeeNavOutputError("SeeNav actions must be a non-empty list")
+        if len(compact) > max_actions:
+            raise SeeNavOutputError(f"SeeNav actions has {len(compact)} actions; maximum is {max_actions}")
+        action_ids: list[int] = []
+        for index, action_id in enumerate(compact):
+            if isinstance(action_id, bool) or not isinstance(action_id, int):
+                raise SeeNavOutputError(f"actions[{index}] must be an integer")
+            if not 0 <= action_id <= SEENAV_MAX_ACTION_ID:
+                raise SeeNavOutputError(f"action id {action_id} outside [0, {SEENAV_MAX_ACTION_ID}]")
+            action_ids.append(action_id)
+        return torch.tensor([[float(action_id), 0.0] for action_id in action_ids], dtype=torch.float32)
+
     plan = payload.get("executable_plan")
     if not isinstance(plan, list) or not plan:
-        raise SeeNavOutputError("SeeNav executable_plan must be a non-empty list")
+        raise SeeNavOutputError("SeeNav actions must be a non-empty list")
     if len(plan) > max_actions:
         raise SeeNavOutputError(f"SeeNav executable_plan has {len(plan)} actions; maximum is {max_actions}")
     action_ids: list[int] = []

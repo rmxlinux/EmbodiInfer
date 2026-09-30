@@ -28,10 +28,11 @@ Strategy:
 6. Do not repeat an invalid action unless a rotation has already been performed.
 """
 
-SEENAV_JSON_TEMPLATE = """You are supposed to output in JSON. The JSON object must contain:
-{"visual_state_description":str, "reasoning_and_reflection":str, "language_plan":str,
- "executable_plan":[{"action_id":int, "action_name":str}]}
-Only output this JSON object. Keep the plan efficient and concise. Do not use markdown code fences.
+SEENAV_JSON_TEMPLATE = """Output only compact JSON with the executable action ids:
+{"actions":[0,2]}
+The actions field must be a non-empty list of 1 to 8 integers. Each integer must be
+between 0 and 7 and must use the action id mapping above. Do not output reasoning,
+descriptions, action names, markdown code fences, or any text outside this JSON object.
 """
 
 

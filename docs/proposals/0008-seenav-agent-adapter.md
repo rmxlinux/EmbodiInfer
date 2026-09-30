@@ -9,11 +9,13 @@
 Add a policy-layer adapter for `wangzc9865/SeeNav-Agent`, a Qwen2.5-VL-3B
 dual-view navigation checkpoint. The adapter uses the existing explicit-session
 protocol and eager autoregressive decoder, with a deliberate batch-one contract.
+The serving prompt uses a compact action-id JSON response; the parser retains
+legacy response compatibility for recorded outputs.
 
 ## 2. Motivation and current gap
 
 The policy catalog has Qwen2.5-VL navigation adapters for R2R low-level,
-panoramic, NaViDA, and ActiveVLN, but no SeeNav adapter. SeeNav emits a structured
+panoramic, NaViDA, and ActiveVLN, but no SeeNav adapter. SeeNav emits a compact structured
 JSON action plan and consumes a first-person/overhead visual prompt, so its loading,
 prompt, history, and parser behavior cannot be expressed by the existing single-token
 or free-form action adapters.
@@ -27,11 +29,13 @@ or simulator integration are non-goals.
 
 ## 4. Design
 
-`embodiinfer.policies.seenav` owns the Qwen processor/model runner, prompt and PIL
-conversion, `SeeNavMemory`, and JSON parser. `SeeNavPolicy` exposes the existing
+`embodiinfer.policies.seenav` owns the Qwen processor/model runner, compact action
+prompt and PIL conversion, `SeeNavMemory`, and JSON parser. `SeeNavPolicy` exposes the existing
 `VLAPolicy` and `AutoregressiveDecoder` contracts. The runner keeps at most four
 completed turns, concatenating overhead then first-person views by default. A strict
-parser rejects malformed, empty, or out-of-range plans. Reusing the R2R parser was
+parser rejects malformed, empty, or out-of-range plans. New responses use
+`{"actions": [action_id, ...]}`; the parser also accepts the old `executable_plan`
+shape for compatibility. Reusing the R2R parser was
 rejected because it assumes one textual action token and cannot represent SeeNav's
 structured plan.
 

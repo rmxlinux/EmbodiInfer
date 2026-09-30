@@ -63,6 +63,11 @@ def test_seenav_parser_accepts_json_and_code_fence() -> None:
     assert parse_seenav_actions(text).tolist() == [[0.0, 0.0], [5.0, 0.0]]
 
 
+def test_seenav_parser_accepts_compact_action_ids() -> None:
+    text = '{"actions": [0, 5, 2]}'
+    assert parse_seenav_actions(text).tolist() == [[0.0, 0.0], [5.0, 0.0], [2.0, 0.0]]
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -71,6 +76,9 @@ def test_seenav_parser_accepts_json_and_code_fence() -> None:
         '{"executable_plan": []}',
         '{"executable_plan": [{"action_id": 8, "action_name": "bad"}]}',
         '{"executable_plan": [{"action_id": 0}]}',
+        '{"actions": []}',
+        '{"actions": [8]}',
+        '{"actions": [true]}',
     ],
 )
 def test_seenav_parser_rejects_invalid_plans(text: str) -> None:
